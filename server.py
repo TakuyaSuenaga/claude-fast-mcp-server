@@ -7,6 +7,7 @@ import os
 
 app = MCPServer()
 ec2 = boto3.client("ec2", region_name="ap-northeast-1")
+ssm = boto3.client("ssm", region_name="ap-northeast-1")
 
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-mcp-server.com/webhook/result")
 AMI_ID = os.getenv("AMI_ID", "ami-xxxxxxxx")  # Claude CLI入りAMI
@@ -117,6 +118,43 @@ def list_instances():
                     )
                 })
         return {"instances": instances}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ===== 6️⃣ SSM 経由でコマンド実行（今回の追加） =====
+@app.tool("run_command_on_instance", description="指定したEC2インスタンス上でコマンドをリモート実行する（SSM経由）")
+def run_command_on_instance(instance_id: str, command: str):
+    """
+    指定したインスタンスに SSM RunCommand を使用してコマンドを実行します。
+    例: {"instance_id": "i-0abcd1234efgh5678", "command": "uptime"}
+    """
+    try:
+        response = ssm.send_command(
+            InstanceIds=[instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": [command]},
+        )
+
+        command_id = response["Command"]["CommandId"]
+
+        # 結果を少し待って取得（同期的に返す）
+        waiter = ssm.get_waiter("command_executed")
+        waiter.wait(CommandId=command_id, InstanceId=instance_id)
+
+        output = ssm.get_command_invocation(
+            CommandId=command_id,
+            InstanceId=instance_id,
+        )
+
+        return {
+            "instance_id": instance_id,
+            "command": command,
+            "stdout": output.get("StandardOutputContent", ""),
+            "stderr": output.get("StandardErrorContent", ""),
+            "status": output.get("Status", "Unknown")
+        }
+
     except Exception as e:
         return {"error": str(e)}
 
